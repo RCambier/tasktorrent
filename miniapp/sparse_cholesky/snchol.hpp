@@ -129,6 +129,8 @@ struct DistMat
     std::atomic<long long> allo_us;
 
     // Logging
+    const int block_size;
+    const int nlevels;
     const int verb;
     const bool do_log;
     const std::string folder;

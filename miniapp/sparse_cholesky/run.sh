@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -o ttor_sparse_cholesky_%j.out
+#SBATCH -o ttor_sparse_cholesky_scalings_%j.out
 
 hostname
 lscpu    

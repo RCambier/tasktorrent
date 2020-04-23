@@ -377,7 +377,7 @@ void DistMat::allocate_blocks(VectorXi& i2irow) {
 }
 
 DistMat::DistMat(const SpMat& Ain, int nlevels, int block_size, int verb, bool log, std::string folder) : 
-    A(Ain), nblk(-1), gemm_us(0), trsm_us(0), potf_us(0), scat_us(0), allo_us(0), verb(verb), do_log(log), folder(folder)
+    A(Ain), nblk(-1), nlevels(nlevels), block_size(block_size), gemm_us(0), trsm_us(0), potf_us(0), scat_us(0), allo_us(0), verb(verb), do_log(log), folder(folder)
 {
     // Initialize & prepare
     int N = A.rows();
@@ -763,13 +763,16 @@ void DistMat::factorize(int n_threads)
     MPI_Barrier(MPI_COMM_WORLD);
     printf("Tp & Comms done\n");
     timer t1 = wctime();
-    printf("Factorization done, time %3.2e s.\n", elapsed(t0, t1));
+    const double total_time = elapsed(t0, t1);
+    const int nrows = A.rows();
+    printf("Factorization done, time %3.2e s.\n", total_time);
     printf("Potf %3.2e s., %3.2e s./thread\n", double(potf_us / 1e6), double(potf_us / 1e6) / n_threads);
     printf("Trsm %3.2e s., %3.2e s./thread\n", double(trsm_us / 1e6), double(trsm_us / 1e6) / n_threads);
     printf("Gemm %3.2e s., %3.2e s./thread\n", double(gemm_us / 1e6), double(gemm_us / 1e6) / n_threads);
     printf("Allo %3.2e s., %3.2e s./thread\n", double(allo_us / 1e6), double(allo_us / 1e6) / n_threads);
     printf("Scat %3.2e s., %3.2e s./thread\n", double(scat_us / 1e6), double(scat_us / 1e6) / n_threads);
-    printf("[%d]>>>>%d %d %d %3.2e\n", my_rank, my_rank, n_ranks, n_threads, elapsed(t0, t1));
+    printf("FORMAT [my_rank] my_rank n_ranks n_threads nblk block_size nlevels nrows total_time\n");
+    printf("[%d]>>>>snchol %d %d %d %d %d %d %d %3.2e\n", my_rank, my_rank, n_ranks, n_threads, nblk, block_size, nlevels, nrows, total_time);
 
     auto am_send_pivot = comm.make_active_msg(
         [&](int &k, int &ksize, view<double> &Akk) {
