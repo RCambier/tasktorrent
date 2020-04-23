@@ -1,51 +1,65 @@
-#include <fstream>
+#include <vector>
+#include <memory>
 #include <iostream>
+#include <cstdlib>
 #include "common.hpp"
-#include <omp.h>
+#include <starpu.h>
 
-/**
- * Run n_tasks that only spins for a certain amount of time
- * Compile with something like 
- * icpc -qopenmp -O3 omp_wait.cpp -o omp_wait
- * g++ -fopenmp -O3 omp_wait.cpp -o omp_wait
+/** 
+ * Compile with something like
+ * icpc -I${HOME}/Softwares/hwloc-2.2.0/install/include -I${HOME}/Softwares/starpu-1.3.2/install/include/starpu/1.3 -lpthread -L${HOME}/Softwares/hwloc-2.2.0/install/lib -L${HOME}/Softwares/starpu-1.3.2/install/lib  -lstarpu-1.3 -lhwloc starpu_wait.cpp -O3 -o starpu_wait -Wall
  */
+
+double SPIN_TIME = 0.0;
+
+void task(void *buffers[], void *cl_arg) { 
+    spin_for_seconds(SPIN_TIME);
+}
+
+struct starpu_codelet task_cl = {
+    .where = STARPU_CPU,
+    .cpu_funcs = { task, NULL },
+    .nbuffers = 0,
+    .modes = { }
+};
+
 int wait_only(const int n_tasks, const double spin_time, const int repeat, const int verb) {
+
+    SPIN_TIME = spin_time;
+    
+    const char* env_n_cores = std::getenv("STARPU_NCPU");
+    if(env_n_cores == nullptr) { printf("Missing STARPU_NCPU\n"); exit(1); }
+    const int n_threads = atoi(env_n_cores);
 
     std::vector<double> efficiencies;
     std::vector<double> times;
-    const int n_threads = omp_get_max_threads();
+    for(int step = 0; step < repeat; step++) {
 
-    for(int k = 0; k < repeat; k++) {
-
+        int err = starpu_init(NULL);
+        if(err != 0) { printf("Error in starpu_init!\n"); exit(1); }
         const auto t0 = wtime_now();
-        #pragma omp parallel
-        {
-        #pragma omp single nowait
-        {
-                for(int i = 0; i < n_tasks; i++) {
-                    #pragma omp task
-                    {
-                        spin_for_seconds(spin_time);
-                    }
-                }
-                #pragma omp taskwait
-            }
+        for (int k = 0; k < n_tasks; k++) {
+            starpu_task_insert(&task_cl, 0);
         }
+        starpu_task_wait_for_all();
         const auto t1 = wtime_now();
+        starpu_shutdown();
+
         const auto time = wtime_elapsed(t0, t1);
-        if(verb) printf("iteration repeat n_threads n_taks spin_time time efficiency\n");
+        if(verb) printf("iteration repeat n_threads n_tasks spin_time time efficiency\n");
         const double speedup = (double)(n_tasks) * (double)(spin_time) / (double)(time);
         const double efficiency = speedup / (double)(n_threads);
         times.push_back(time);
         efficiencies.push_back(efficiency);
-        printf("++++ omp %d %d %d %d %e %e %e\n", k, repeat, n_threads, n_tasks, spin_time, time, efficiency);
+        printf("++++ starpu %d %d %d %d %e %e %e\n", step, repeat, n_threads, n_tasks, spin_time, time, efficiency);
+
     }
 
     double eff_mean, eff_std, time_mean, time_std;
     compute_stats(efficiencies, &eff_mean, &eff_std);
     compute_stats(times, &time_mean, &time_std);
     if(verb) printf("repeat n_threads spin_time n_tasks efficiency_mean efficiency_std time_mean time_std\n");
-    printf(">>>> omp %d %d %e %d %e %e %e %e\n", repeat, n_threads, spin_time, n_tasks, eff_mean, eff_std, time_mean, time_std);
+    printf(">>>> starpu %d %d %e %d %e %e %e %e\n", repeat, n_threads, spin_time, n_tasks, eff_mean, eff_std, time_mean, time_std);
 
     return 0;
 }
@@ -78,8 +92,7 @@ int main(int argc, char **argv)
         if(verb < 0) { printf("Wrong argument\n"); exit(1); }
     }
 
-    if(verb) printf("OMP_NUM_THREADS=16 ./omp_wait n_tasks spin_time verb\n");
+    if(verb) printf("STARPU_NCPU=XX ./starpu_wait n_tasks spin_time verb\n");
     int error = wait_only(n_tasks, spin_time, repeat, verb);
-
     return error;
 }

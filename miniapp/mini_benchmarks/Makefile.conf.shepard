@@ -1,3 +1,0 @@
-CC      = icpc
-INCLUDE =
-LIBS    = -ltbbmalloc_proxy

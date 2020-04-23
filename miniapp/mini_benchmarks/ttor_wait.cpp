@@ -8,40 +8,64 @@
 #include <map>
 #include <memory>
 
-#include "spin.hpp"
+#include "common.hpp"
 
 /**
  * Run n_tasks that only spins for a certain amount of time
  */
-int wait_only(const int n_threads, const int n_tasks, const double spin_for, const int verb) {
+int wait_only(const int n_threads, const int n_tasks, const double spin_time, const bool time_insertion, const int repeat, const int verb) {
 
-    ttor::Threadpool_shared tp(n_threads, 0, "Wk_", false);
-    ttor::Taskflow<int> tf_0(&tp, 0);
+    std::vector<double> efficiencies;
+    std::vector<double> times;
 
-    tf_0.set_mapping([&](int k) {
-        return (k % n_threads);
-    })
-    .set_indegree([&](int k) {
-        return 1;
-    })
-    .set_task([&](int k) {
-        spin_for_seconds(spin_for);
-    });
+    for(int i = 0; i < repeat; i++) {
 
+        ttor::Threadpool_shared tp(n_threads, 0, "Wk_", false);
+        ttor::Taskflow<int> tf(&tp, 0);
 
-    for(int k = 0; k < n_tasks; k++) {
-        tf_0.fulfill_promise(k);
+        tf.set_mapping([&](int k) {
+            return (k % n_threads);
+        })
+        .set_indegree([&](int k) {
+            return 1;
+        })
+        .set_task([&](int k) {
+            spin_for_seconds(spin_time);
+        });
+
+        double time = 0.0;
+        if(time_insertion) { // For comparison with *PU and OpenMP
+            const auto t0 = wtime_now();
+            tp.start();
+            for(int k = 0; k < n_tasks; k++) {
+                tf.fulfill_promise(k);
+            }
+            tp.join();
+            const auto t1 = wtime_now();
+            time = wtime_elapsed(t0, t1);
+        } else { // For measuring the "pure serial" overhead
+            for(int k = 0; k < n_tasks; k++) {
+                tf.fulfill_promise(k);
+            }
+            const auto t0 = wtime_now();
+            tp.start();
+            tp.join();
+            const auto t1 = wtime_now();
+            time = wtime_elapsed(t0, t1);
+        }
+        if(verb) printf("iteration repeat n_threads n_tasks spin_time time time_insertion efficiency\n");
+        double speedup = (double)(n_tasks) * (double)(spin_time) / (double)(time);
+        double efficiency = speedup / (double)(n_threads);
+        times.push_back(time);
+        efficiencies.push_back(efficiency);
+        printf("++++ ttor %d %d %d %d %e %e %d %e\n", i, repeat, n_threads, n_tasks, spin_time, time, (int) time_insertion, efficiency);
     }
-    auto t0 = ttor::wctime();
-    tp.start();
-    tp.join();
-    auto t1 = ttor::wctime();
-    double time = ttor::elapsed(t0, t1);
-    if(verb) printf("test n_threads n_taks spin_time time total_tasks efficiency\n");
-    int total_tasks = n_tasks;
-    double speedup = (double)(total_tasks) * (double)(spin_for) / (double)(time);
-    double efficiency = speedup / (double)(n_threads);
-    printf("ttor %d %d %e %e %d %e\n", n_threads, n_tasks, spin_for, time, total_tasks, efficiency);
+
+    double eff_mean, eff_std, time_mean, time_std;
+    compute_stats(efficiencies, &eff_mean, &eff_std);
+    compute_stats(times, &time_mean, &time_std);
+    if(verb) printf("repeat n_threads spin_time n_tasks time_insertion efficiency_mean efficiency_std time_mean time_std\n");
+    printf(">>>> ttor %d %d %e %d %d %e %e %e %e\n", repeat, n_threads, spin_time, n_tasks, (int) time_insertion, eff_mean, eff_std, time_mean, time_std);
 
     return 0;
 }
@@ -49,33 +73,44 @@ int wait_only(const int n_threads, const int n_tasks, const double spin_for, con
 int main(int argc, char **argv)
 {
     int n_threads = 1;
-    int n_tasks = 1000000;
-    double spin_for = 1e-6;
+    int n_tasks = 1000;
+    double spin_time = 1e-6;
+    bool time_insertion = true; // true means we also measure the insertion of all the tasks
+    int repeat = 1;
     int verb = 0;
 
     if (argc >= 2)
     {
         n_threads = atoi(argv[1]);
-        assert(n_threads > 0);
+        if(n_threads <= 0) { printf("Wrong argument\n"); exit(1); }
     }
     if (argc >= 3)
     {
         n_tasks = atoi(argv[2]);
-        assert(n_tasks >= 0);
+        if(n_tasks < 0) { printf("Wrong argument\n"); exit(1); }
     }
     if (argc >= 4)
     {
-        spin_for = atof(argv[3]);
-        assert(spin_for >= 0);
+        spin_time = atof(argv[3]);
+        if(spin_time < 0) { printf("Wrong argument\n"); exit(1); }
     }
     if (argc >= 5)
     {
-        verb = atoi(argv[4]);
-        assert(verb >= 0);
+        time_insertion = (bool)atoi(argv[4]);
+    }
+    if (argc >= 6)
+    {
+        repeat = atoi(argv[5]);
+        if(repeat <= 0) { printf("Wrong argument\n"); exit(1); }
+    }
+    if (argc >= 7)
+    {
+        verb = atoi(argv[6]);
+        if(verb < 0) { printf("Wrong argument\n"); exit(1); }
     }
 
-    if(verb) printf("./micro_wait n_threads n_tasks spin_for verb\n");
-    int error = wait_only(n_threads, n_tasks, spin_for, verb);
+    if(verb) printf("./micro_wait n_threads n_tasks spin_time time_insertion repeat verb\n");
+    int error = wait_only(n_threads, n_tasks, spin_time, time_insertion, repeat, verb);
 
     return error;
 }
