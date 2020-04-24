@@ -97,6 +97,9 @@ struct Node
 struct DistMat
 {
   private:
+    const int my_rank;
+    const int n_ranks;
+
     // All the nodes
     // nodes[i] = ith pivot (diagonal bloc)
     std::vector<std::unique_ptr<Node>> nodes;

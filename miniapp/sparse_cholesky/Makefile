@@ -1,6 +1,6 @@
 include Makefile.conf
 
-CFLAGS   += -pthread -O3 -g -std=c++14 -DEIGEN_NO_DEBUG -Wall -Wextra
+CFLAGS   += -pthread -O3 -g -std=c++14 -Wall -Wextra
 INCLUDE  += -I../../src/ -I./
 LIBS     += 
 SRCDIR   = ../../src

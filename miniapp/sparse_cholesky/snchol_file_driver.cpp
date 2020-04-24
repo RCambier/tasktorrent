@@ -33,6 +33,7 @@ int N_THREADS = 4;
 int BLOCK_SIZE = 10;
 string FOLDER = "./";
 int REPEAT = 1;
+bool TEST = true;
 
 void run()
 {
@@ -40,17 +41,19 @@ void run()
     std::unique_ptr<DistMat> dm = make_DistMat_from_file(FILENAME, N_LEVELS, BLOCK_SIZE, VERB, LOG, FOLDER);
     const SpMat A = dm->get_A();
     dm->factorize(N_THREADS);
-    if (comm_rank() == 0)
+    if (TEST)
     {
         VectorXd b = random(A.rows(), 2019);
         VectorXd x = dm->solve(b);
-        double res = (A * x - b).norm() / b.norm();
-        printf("|Ax-b|/|b| = %e\n", res);
-        if(res <= 1e-12) {
-            printf("\nTest ok!\n");
-        } else {
-            printf("\n=> Error is too large\n");
-            exit(1);
+        if(comm_rank() == 0) {
+            double res = (A * x - b).norm() / b.norm();
+            printf("|Ax-b|/|b| = %e\n", res);
+            if(res <= 1e-12) {
+                printf("\nTest ok!\n");
+            } else {
+                printf("\n=> Error is too large\n");
+                exit(1);
+            }
         }
     }
 }

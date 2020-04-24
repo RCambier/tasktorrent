@@ -25,7 +25,7 @@ int3 lower(int3 kij)
 // @in c_rows is a subset of p_rows
 // @in c_rows, p_rows are sorted
 // @post out[i] = j <=> c_rows[i] == p_rows[j]
-vector<int> get_subids(vector<int> &c_rows, vector<int> &p_rows)
+vector<int> get_subids(const vector<int> &c_rows, const vector<int> &p_rows)
 {
     int cn = c_rows.size();
     vector<int> subids(cn);
@@ -117,6 +117,7 @@ void algebraic_partitioning(int N, VectorXi &rowval, VectorXi &colptr, int nleve
             assert(p == -1 || (p >= 0 && p < nblk));
         }
     }
+    SCOTCH_graphExit(graph);
 }
 
 MatBlock::MatBlock(int i_, int j_) : i(i_), j(j_), matA(nullptr), n_accumulate(0), accumulating_busy(false), accumulated(0) {};
@@ -336,6 +337,7 @@ void DistMat::distribute_tree(vector<int> &roots) {
 // Allocate blocks[i,k]->A() when column k resides on this rank
 // Fill blocks[i,k]->A() when column k resides on this rank
 void DistMat::allocate_blocks(VectorXi& i2irow) {
+    size_t total_allocated = 0;
     for (int k = 0; k < nblk; k++)
     {
         if (col2rank(k) == comm_rank())
@@ -344,11 +346,13 @@ void DistMat::allocate_blocks(VectorXi& i2irow) {
             auto &n = nodes.at(k);
             auto &b = blocks.at({k, k});
             b->matA = make_unique<MatrixXd>(n->size, n->size);
+            total_allocated += b->matA->size() * sizeof(double);
             b->A()->setZero();
             for (auto nirow : n->nbrs)
             {
                 auto &b = blocks.at({nirow, k});
                 b->matA = make_unique<MatrixXd>(b->rows.size(), n->size);
+                total_allocated += b->matA->size() * sizeof(double);
                 b->A()->setZero();
             }
             // Fill
@@ -374,10 +378,11 @@ void DistMat::allocate_blocks(VectorXi& i2irow) {
 
         }
     }
+    printf("%zd B allocated for blocks\n", total_allocated);
 }
 
 DistMat::DistMat(const SpMat& Ain, int nlevels, int block_size, int verb, bool log, std::string folder) : 
-    A(Ain), nblk(-1), nlevels(nlevels), block_size(block_size), gemm_us(0), trsm_us(0), potf_us(0), scat_us(0), allo_us(0), verb(verb), do_log(log), folder(folder)
+    my_rank(comm_rank()), n_ranks(comm_size()), A(Ain), nblk(-1), nlevels(nlevels), block_size(block_size), gemm_us(0), trsm_us(0), potf_us(0), scat_us(0), allo_us(0), verb(verb), do_log(log), folder(folder)
 {
     // Initialize & prepare
     int N = A.rows();
@@ -551,8 +556,6 @@ void DistMat::factorize(int n_threads)
         }
     }
 
-    const int my_rank = comm_rank();
-    const int n_ranks = comm_size();
     MPI_Barrier(MPI_COMM_WORLD);
     timer t0 = wctime();
     printf("Rank %d starting w/ %d threads\n", my_rank, n_threads);
@@ -569,7 +572,9 @@ void DistMat::factorize(int n_threads)
             auto *b = this->blocks.at({i, k}).get();
             b->matA = make_unique<MatrixXd>(isize, ksize);
             memcpy(b->A()->data(), Aik.data(), Aik.size() * sizeof(double));
-            for (auto j : js)
+            vector<int> jss(js.size());
+            memcpy(jss.data(), js.data(), js.size() * sizeof(int));
+            for (auto j : jss)
             {
                 gf.fulfill_promise(lower({k, i, j}));
             }
@@ -771,65 +776,14 @@ void DistMat::factorize(int n_threads)
     printf("Gemm %3.2e s., %3.2e s./thread\n", double(gemm_us / 1e6), double(gemm_us / 1e6) / n_threads);
     printf("Allo %3.2e s., %3.2e s./thread\n", double(allo_us / 1e6), double(allo_us / 1e6) / n_threads);
     printf("Scat %3.2e s., %3.2e s./thread\n", double(scat_us / 1e6), double(scat_us / 1e6) / n_threads);
-    printf("FORMAT [my_rank] my_rank n_ranks n_threads nblk block_size nlevels nrows total_time\n");
-    printf("[%d]>>>>snchol %d %d %d %d %d %d %d %3.2e\n", my_rank, my_rank, n_ranks, n_threads, nblk, block_size, nlevels, nrows, total_time);
-
-    auto am_send_pivot = comm.make_active_msg(
-        [&](int &k, int &ksize, view<double> &Akk) {
-            auto &b = this->blocks.at({k, k});
-            b->matA = make_unique<MatrixXd>(ksize, ksize);
-            memcpy(b->A()->data(), Akk.data(), Akk.size() * sizeof(double));
-        });
-
-    auto am_send_panel2 = comm.make_active_msg(
-        [&](int &i, int &k, int &isize, int &ksize, view<double> &Aik) {
-            auto &b = this->blocks.at({i, k});
-            b->matA = make_unique<MatrixXd>(isize, ksize);
-            memcpy(b->A()->data(), Aik.data(), Aik.size() * sizeof(double));
-        });
-
-    if (my_rank != 0)
-    {
-        for (int k = 0; k < nblk; k++)
-        {
-            if (col2rank(k) == my_rank)
-            {
-                // Send column to 0
-                auto &n = nodes.at(k);
-                { // Pivot
-                    MatrixXd *Akk = blocks.at({k, k})->A();
-                    int ksize = Akk->rows();
-                    auto vAkk = view<double>(Akk->data(), Akk->size());
-                    am_send_pivot->send(0, k, ksize, vAkk);
-                }
-                for (auto i : n->nbrs)
-                {
-                    MatrixXd *Aik = blocks.at({i, k})->A();
-                    int ksize = Aik->cols();
-                    int isize = Aik->rows();
-                    auto vAik = view<double>(Aik->data(), Aik->size());
-                    am_send_panel2->send(0, i, k, isize, ksize, vAik);
-                }
-            }
-        }
-    }
-    else
-    {
-        for (int k = 0; k < nblk; k++)
-        {
-            if (col2rank(k) != 0)
-            {
-                comm.recv_process();
-                auto &n = nodes.at(k);
-                for (auto i : n->nbrs)
-                    comm.recv_process();
-            }
-        }
-    }
-
-    while(! comm.is_done()) {
-        comm.progress();
-    }
+    const int n_threads_total = n_threads * n_ranks;
+    const size_t n_rows_2 = (size_t)nrows * (size_t)nrows;
+    const size_t n_rows_2_per_threads_total = n_rows_2 / n_threads_total;
+    printf("FORMAT [my_rank] my_rank n_ranks n_threads n_threads_total nblk block_size nlevels nrows n_rows_2 n_rows_2_per_threads_total total_time\n");
+    printf("[%d]>>>>snchol %d %d %d %d %d %d %d %d %zd %zd %3.2e\n", 
+            my_rank, my_rank, n_ranks, n_threads, n_threads_total,
+            nblk, block_size, nlevels, nrows, 
+            n_rows_2, n_rows_2_per_threads_total, total_time);
 
     if (do_log > 0)
     {
@@ -844,65 +798,110 @@ void DistMat::factorize(int n_threads)
 
 VectorXd DistMat::solve(VectorXd &b)
 {
-    assert(comm_rank() == 0);
+    // Send to rank 0
+    for (int k = 0; k < nblk; k++)
+    {
+        if (my_rank != 0 && col2rank(k) == my_rank)
+        {
+            // Send column to 0
+            {
+                MatrixXd *Akk = blocks.at({k, k})->A();
+                const int ksize = Akk->rows();
+                MPI_Send(Akk->data(), ksize * ksize, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+            }
+            auto &n = nodes.at(k);
+            for (auto i : n->nbrs)
+            {
+                MatrixXd *Aik = blocks.at({i, k})->A();
+                const int isize = Aik->rows();
+                const int ksize = Aik->cols();
+                MPI_Send(Aik->data(), ksize * isize, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+            }
+        } else if (my_rank == 0 && col2rank(k) != 0) {
+            const int from = col2rank(k);
+            // Receive column
+            {
+                MatBlock* b = blocks.at({k,k}).get();
+                const int ksize = b->rows.size();
+                assert(b->cols.size() == ksize);
+                b->matA = make_unique<MatrixXd>(ksize, ksize);
+                MatrixXd* Akk = b->A();
+                MPI_Recv(Akk->data(), ksize * ksize, MPI_DOUBLE, from, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+            auto &n = nodes.at(k);
+            for (auto i : n->nbrs)
+            {
+                MatBlock* b = blocks.at({i,k}).get();
+                const int isize = b->rows.size();
+                const int ksize = b->cols.size();
+                b->matA = make_unique<MatrixXd>(isize, ksize);
+                MatrixXd* Aik = b->A();
+                MPI_Recv(Aik->data(), ksize * isize, MPI_DOUBLE, from, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+        }
+    }
+
+    // Solve
     VectorXd xglob = perm.asPermutation() * b;
-    // Set solution on each node
-    for (int krow = 0; krow < nblk; krow++)
-    {
-        auto &k = nodes.at(krow);
-        k->xsol = xglob.segment(k->start, k->size);
-    }
-    // Forward
-    for (int krow = 0; krow < nblk; krow++)
-    {
-        auto &k = nodes.at(krow);
-        // Pivot xs <- Lss^-1 xs
-        MatrixXd *Lss = blocks.at({krow, krow})->A();
-        cblas_dtrsv(CblasColMajor, CblasLower, CblasNoTrans, CblasNonUnit, Lss->rows(), Lss->data(), Lss->rows(), k->xsol.data(), 1);
-        // Neighbors
-        for (int irow : k->nbrs)
+    if(my_rank == 0) {
+        // Set solution on each node
+        for (int krow = 0; krow < nblk; krow++)
         {
-            auto &n = nodes.at(irow);
-            MatrixXd *Lns = blocks.at({irow, krow})->A();
-            VectorXd xn(Lns->rows());
-            // xn = -Lns xs
-            cblas_dgemv(CblasColMajor, CblasNoTrans, Lns->rows(), Lns->cols(), -1.0, Lns->data(), Lns->rows(), k->xsol.data(), 1, 0.0, xn.data(), 1);
-            // Reduce into xn
-            auto Iids = get_subids(blocks.at({irow, krow})->rows, blocks.at({irow, irow})->cols);
-            for (int i = 0; i < xn.size(); i++)
+            auto &k = nodes.at(krow);
+            k->xsol = xglob.segment(k->start, k->size);
+        }
+        // Forward
+        for (int krow = 0; krow < nblk; krow++)
+        {
+            auto &k = nodes.at(krow);
+            // Pivot xs <- Lss^-1 xs
+            MatrixXd *Lss = blocks.at({krow, krow})->A();
+            cblas_dtrsv(CblasColMajor, CblasLower, CblasNoTrans, CblasNonUnit, Lss->rows(), Lss->data(), Lss->rows(), k->xsol.data(), 1);
+            // Neighbors
+            for (int irow : k->nbrs)
             {
-                n->xsol(Iids[i]) += xn(i);
+                auto &n = nodes.at(irow);
+                MatrixXd *Lns = blocks.at({irow, krow})->A();
+                VectorXd xn(Lns->rows());
+                // xn = -Lns xs
+                cblas_dgemv(CblasColMajor, CblasNoTrans, Lns->rows(), Lns->cols(), -1.0, Lns->data(), Lns->rows(), k->xsol.data(), 1, 0.0, xn.data(), 1);
+                // Reduce into xn
+                auto Iids = get_subids(blocks.at({irow, krow})->rows, blocks.at({irow, irow})->cols);
+                for (int i = 0; i < xn.size(); i++)
+                {
+                    n->xsol(Iids[i]) += xn(i);
+                }
             }
         }
-    }
-    // Backward
-    for (int krow = nblk - 1; krow >= 0; krow--)
-    {
-        auto &k = nodes.at(krow);
-        // Neighbors
-        for (int irow : k->nbrs)
+        // Backward
+        for (int krow = nblk - 1; krow >= 0; krow--)
         {
-            auto &n = nodes.at(irow);
-            MatrixXd *Lns = blocks.at({irow, krow})->A();
-            VectorXd xn(Lns->rows());
-            // Fetch from xn
-            auto Iids = get_subids(blocks.at({irow, krow})->rows, blocks.at({irow, irow})->cols);
-            for (int i = 0; i < xn.size(); i++)
+            auto &k = nodes.at(krow);
+            // Neighbors
+            for (int irow : k->nbrs)
             {
-                xn(i) = n->xsol(Iids[i]);
+                auto &n = nodes.at(irow);
+                MatrixXd *Lns = blocks.at({irow, krow})->A();
+                VectorXd xn(Lns->rows());
+                // Fetch from xn
+                auto Iids = get_subids(blocks.at({irow, krow})->rows, blocks.at({irow, irow})->cols);
+                for (int i = 0; i < xn.size(); i++)
+                {
+                    xn(i) = n->xsol(Iids[i]);
+                }
+                // xs -= Lns^T xn
+                cblas_dgemv(CblasColMajor, CblasTrans, Lns->rows(), Lns->cols(), -1.0, Lns->data(), Lns->rows(), xn.data(), 1, 1.0, k->xsol.data(), 1);
             }
-            // xs -= Lns^T xn
-            cblas_dgemv(CblasColMajor, CblasTrans, Lns->rows(), Lns->cols(), -1.0, Lns->data(), Lns->rows(), xn.data(), 1, 1.0, k->xsol.data(), 1);
+            // xs = Lss^-T xs
+            MatrixXd *Lss = blocks.at({krow, krow})->A();
+            cblas_dtrsv(CblasColMajor, CblasLower, CblasTrans, CblasNonUnit, Lss->rows(), Lss->data(), Lss->rows(), k->xsol.data(), 1);
         }
-        // xs = Lss^-T xs
-        MatrixXd *Lss = blocks.at({krow, krow})->A();
-        cblas_dtrsv(CblasColMajor, CblasLower, CblasTrans, CblasNonUnit, Lss->rows(), Lss->data(), Lss->rows(), k->xsol.data(), 1);
-    }
-    // Back to x
-    for (int krow = 0; krow < nblk; krow++)
-    {
-        auto &k = nodes.at(krow);
-        xglob.segment(k->start, k->size) = k->xsol;
+        // Back to x
+        for (int krow = 0; krow < nblk; krow++)
+        {
+            auto &k = nodes.at(krow);
+            xglob.segment(k->start, k->size) = k->xsol;
+        }
     }
     return perm.asPermutation().transpose() * xglob;
 }
