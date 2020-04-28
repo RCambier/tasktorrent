@@ -30,7 +30,7 @@ int wait_chain_deps(const int n_threads,
 
     for(int step = 0; step < repeat; step++) {
 
-        ttor::Threadpool_shared tp(n_threads, verb <= 1 ? 0 : verb, "Wk_", false);
+        ttor::Threadpool_shared tp(n_threads, verb <= 1 ? 0 : verb, "Wk_");
         ttor::Taskflow<int2> tf(&tp, verb <= 1 ? 0 : verb);
         std::atomic<size_t> n_tasks_ran(0);
 
@@ -49,13 +49,15 @@ int wait_chain_deps(const int n_threads,
                 }
             }
         })
+        .set_priority([&](int2 ij) {
+            return n_cols - (double)ij[1];
+        })
         .set_name([&](int2 ij){return std::to_string(ij[0]) + "_" + std::to_string(ij[1]);});
 
         auto t0 = ttor::wctime();
         for(int k = 0; k < n_rows; k++) {
             tf.fulfill_promise({k,0});
         }
-        tp.start();
         tp.join();
         auto t1 = ttor::wctime();
         double time = ttor::elapsed(t0, t1);
@@ -65,7 +67,7 @@ int wait_chain_deps(const int n_threads,
         double efficiency = speedup / (double)(n_threads);
         efficiencies.push_back(efficiency);
         times.push_back(time);
-        printf("++++ ttor %d %d %d %d %d %d %e %e %d %e\n", step, repeat, n_threads, n_rows, n_edges, n_cols, spin_time, time, n_tasks, efficiency);
+        printf("++++ ttordeps %d %d %d %d %d %d %e %e %d %e\n", step, repeat, n_threads, n_rows, n_edges, n_cols, spin_time, time, n_tasks, efficiency);
 
     }
 
@@ -73,7 +75,7 @@ int wait_chain_deps(const int n_threads,
     compute_stats(efficiencies, &eff_mean, &eff_std);
     compute_stats(times, &time_mean, &time_std);
     if(verb) printf("repeat n_threads n_rows n_edges n_cols spin_time n_tasks efficiency_mean efficiency_std time_mean time_std\n");
-    printf(">>>> ttor %d %d %d %d %d %e %d %e %e %e %e\n", repeat, n_threads, n_rows, n_edges, n_cols, spin_time, n_tasks, eff_mean, eff_std, time_mean, time_std);
+    printf(">>>> ttordeps %d %d %d %d %d %e %d %e %e %e %e\n", repeat, n_threads, n_rows, n_edges, n_cols, spin_time, n_tasks, eff_mean, eff_std, time_mean, time_std);
 
     return 0;
 }
