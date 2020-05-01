@@ -49,6 +49,7 @@ struct ActiveMsg_type<Ret (Class::*)(Args &...) const>
 
 struct TaskProcess : public Task {
     std::unique_ptr<message> m;
+    virtual ~TaskProcess();
 };
 
 class Communicator

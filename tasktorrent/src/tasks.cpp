@@ -14,3 +14,5 @@ bool less_pTask::operator()(const Task *lhs, const Task *rhs)
 {
     return lhs->priority < rhs->priority;
 }
+
+Task::~Task() {};

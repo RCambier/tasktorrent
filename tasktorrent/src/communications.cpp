@@ -38,6 +38,8 @@ std::string processor_name()
     return std::string(name);
 }
 
+TaskProcess::~TaskProcess() {};
+
 /**
  * Communicator
  */

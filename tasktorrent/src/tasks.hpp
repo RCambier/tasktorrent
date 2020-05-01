@@ -12,6 +12,7 @@ struct Task
     std::string name;
     Task();
     const char *c_name();
+    virtual ~Task();
 };
 
 struct less_pTask
