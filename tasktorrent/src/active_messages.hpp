@@ -24,8 +24,11 @@ class ActiveMsgBase
 {
 private:
     int id_;
+    bool bound_;
 public:
     int get_id() const;
+    bool is_bound_to_MPI_master() const;
+    void allow_on_worker();
     virtual void run(char *, size_t) = 0;
     ActiveMsgBase(int id);
     virtual ~ActiveMsgBase();

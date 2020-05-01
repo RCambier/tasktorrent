@@ -5,8 +5,10 @@
 #include <mutex>
 #include <tuple>
 #include <cassert>
+#include <random>
 
 #include "communications.hpp"
+#include "threadpool_shared.hpp"
 #include "mpi_utils.hpp"
 #include "serialization.hpp"
 #include "active_messages.hpp"
@@ -44,6 +46,7 @@ Communicator::Communicator(int verb_) :
     verb(verb_), 
     logger(nullptr), 
     log(false), 
+    tp(nullptr),
     messages_queued(0), 
     messages_processed(0) {
         TASKTORRENT_MPI_CHECK(MPI_Type_contiguous(static_cast<int>(mega), MPI_BYTE, &MPI_MEGABYTE));
@@ -207,7 +210,38 @@ void Communicator::process_Ircvd_messages()
                 e = std::make_unique<Event>("rank_" + std::to_string(comm_rank()) + ">lpc>" + "rank_" + std::to_string(m->other) + ">" + std::to_string(m->tag));
 
             // Process the message
-            process_message(m);
+            {
+                // Get AM, check if we can give to threadpool
+                Serializer<int> s;
+                std::tuple<int> tup = s.read_buffer(m->buffer.data(), m->buffer.size());
+                int am_id = std::get<0>(tup);
+                assert(am_id >= 0 && am_id < static_cast<int>(active_messages.size()));
+                bool bound = active_messages.at(am_id)->is_bound_to_MPI_master();
+
+                if(bound) {
+                    process_message(m);
+                } else {
+                    // Random thread
+                    assert(tp != nullptr);
+                    assert(tp->size() > 0);
+                    std::random_device r;
+                    std::default_random_engine e(r());
+                    std::uniform_int_distribution<int> uniform_dist(0, tp->size()-1);
+                    int where = uniform_dist(e);
+    
+                    // Create a task to access and modify the dependency map
+                    TaskProcess *t = new TaskProcess();
+                    t->fulfill = []() {};
+                    t->m = std::move(m);
+                    t->name = "lpc_intern_";
+                    t->priority = std::numeric_limits<double>::max();
+                    t->run = std::move([this,t]() {
+                        process_message(t->m);
+                    });
+                    tp->insert(t, where, false);
+                }
+            }
+            // process_message(m);
 
             if (log)
                 logger->record(std::move(e));

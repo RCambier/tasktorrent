@@ -214,6 +214,7 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
     Taskflow<int2> trsm(&tp, verb);
     Taskflow<int3> gemm(&tp, verb);
     Taskflow<int3> accu(&tp, verb);
+    comm.tp = &tp;
 
     Logger logger(1000000);
     if(log) {
@@ -231,6 +232,7 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
                     trsm.fulfill_promise({i,j});
                 }
             });
+    am_trsm->allow_on_worker();
 
     /**
      * j is the pivot's position at A(j,j)
@@ -296,6 +298,7 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
                 gemm.fulfill_promise({j,ij[0],ij[1]});
             }
         });
+    am_gemm->allow_on_worker();
 
     /**
      * ij is (Row, Col) of the block in the matrix at A(i,j)

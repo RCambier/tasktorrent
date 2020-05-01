@@ -15,6 +15,7 @@
 #include "message.hpp"
 #include "mpi_utils.hpp"
 #include "functional_extra.hpp"
+#include "tasks.hpp"
 
 namespace ttor
 {
@@ -22,6 +23,8 @@ namespace ttor
 int comm_rank();
 int comm_size();
 std::string processor_name();
+
+class Threadpool_shared;
 
 class ActiveMsgBase;
 
@@ -44,6 +47,10 @@ struct ActiveMsg_type<Ret (Class::*)(Args &...) const>
     using type = ActiveMsg<Args...>;
 };
 
+struct TaskProcess : public Task {
+    std::unique_ptr<message> m;
+};
+
 class Communicator
 {
 
@@ -58,6 +65,9 @@ private:
     std::atomic<int> messages_queued; // queued messages
     std::atomic<int> messages_processed; // received and processed messages
     MPI_Datatype MPI_MEGABYTE; // used to send large message larger than 4GB
+public:
+    Threadpool_shared* tp;
+private:
 
     /** Small messages                        
      *  This class maintains three lists to handle "small" messages, for which we allocate memory internally.
