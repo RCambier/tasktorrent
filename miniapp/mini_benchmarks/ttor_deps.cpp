@@ -1,5 +1,3 @@
-#include "runtime.hpp"
-#include "util.hpp"
 #include <fstream>
 #include <array>
 #include <random>
@@ -8,6 +6,7 @@
 #include <map>
 #include <memory>
 
+#include "tasktorrent/tasktorrent.hpp"
 #include "common.hpp"
 
 typedef std::array<int,2> int2;

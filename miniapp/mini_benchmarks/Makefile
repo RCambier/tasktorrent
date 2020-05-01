@@ -1,15 +1,16 @@
 include Makefile.conf
 
 CFLAGS   += -pthread -O3 -std=c++14 -DTTOR_SHARED -DNDEBUG -Wall -Wextra
-INCLUDE  += -I../../src/
+INCLUDE  += -I../../
 LIBS     += 
-SRCDIR   = ../../src
+SRCDIR   = ../../tasktorrent/src
 OBJDIR   = ../../build
 
 .PHONY: clean
 
-DEPS = $(SRCDIR)/runtime.hpp $(SRCDIR)/util.hpp $(SRCDIR)/serialization.hpp $(SRCDIR)/views.hpp $(SRCDIR)/apply_functions.hpp $(SRCDIR)/functional_extra.hpp
-OBJ  = $(OBJDIR)/serialization.o $(OBJDIR)/util.o
+DEPS := $(wildcard $(SRCDIR)/*.hpp)
+SRCS := $(wildcard $(SRCDIR)/*.cpp)
+OBJ := $(patsubst $(SRCDIR)/%.cpp,$(OBJDIR)/%.o,$(SRCS))
 
 all: ttor_wait ttor_cholesky ttor_deps omp_wait starpu_wait starpu_deps starpu_deps_stf
 

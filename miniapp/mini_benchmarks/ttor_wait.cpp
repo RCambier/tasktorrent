@@ -1,5 +1,3 @@
-#include "runtime.hpp"
-#include "util.hpp"
 #include <fstream>
 #include <array>
 #include <random>
@@ -9,6 +7,7 @@
 #include <memory>
 
 #include "common.hpp"
+#include "tasktorrent/tasktorrent.hpp"
 
 /**
  * Run n_tasks that only spins for a certain amount of time
