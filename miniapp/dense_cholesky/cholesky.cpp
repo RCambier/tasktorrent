@@ -81,11 +81,13 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
     for (int ii=0; ii<num_blocks; ii++) {
         for (int jj=0; jj<num_blocks; jj++) {
             auto val_loc = [&](int i, int j) { return val(ii*block_size+i,jj*block_size+j); };
-            if(block_2_rank(ii,jj) == rank) {
-                blocks[ii+jj*num_blocks]=make_unique<MatrixXd>(block_size,block_size);
-                *blocks[ii+jj*num_blocks]=MatrixXd::NullaryExpr(block_size, block_size, val_loc);
-            } else {
-                blocks[ii+jj*num_blocks]=make_unique<MatrixXd>(block_size,block_size);
+            if(ii >= jj) {
+                if(block_2_rank(ii,jj) == rank) {
+                    blocks[ii+jj*num_blocks]=make_unique<MatrixXd>(block_size,block_size);
+                    *blocks[ii+jj*num_blocks]=MatrixXd::NullaryExpr(block_size, block_size, val_loc);
+                } else {
+                    blocks[ii+jj*num_blocks]=make_unique<MatrixXd>(block_size,block_size);
+                }
             }
         }
     }
@@ -238,9 +240,6 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
     // Send a potrf'ed pivot A(k,k) and trigger trsms below requiring A(k,k)
     auto am_trsm = comm.make_large_active_msg( 
             [&](int& j) {
-                // for(auto& i: is) {
-                //     trsm.fulfill_promise({i,j});
-                // }
                 int off = (nprows + rank_row - block_2_rank_row(j,j)) % nprows;
                 assert(off > 0); // Can't be me
                 assert(off < nprows);
@@ -265,32 +264,6 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
         })
         .set_fulfill([&](int j) { // Triggers all trsms on rows i > j, A[i,j]
             assert(block_2_rank(j,j) == rank);
-
-            // map<int,vector<int>> fulfill;
-            // for (int i = j+1; i<num_blocks; i++) {
-            //     fulfill[block_2_rank(i,j)].push_back(i);
-            // }
-            // for (auto& rf: fulfill) {
-            //     int r = rf.first;
-            //     if (rank == r) {
-            //         for (auto& i: rf.second) {
-            //             trsm.fulfill_promise({i,j});
-            //             if(deps_log) {
-            //                 dlog.add_event(make_unique<DepsEvent>(potrf.name(j), trsm.name({i,j})));
-            //             }
-            //         }
-            //     } else {
-            //         auto Ljjv = view<double>(blocks[j+j*num_blocks]->data(), block_size*block_size);
-            //         auto isv = view<int>(rf.second.data(), rf.second.size());                    
-            //         if(deps_log) {
-            //             for(auto i: isv) {
-            //                 dlog.add_event(make_unique<DepsEvent>(potrf.name(j), trsm_name({i,j}, r)));
-            //             }
-            //         }
-            //         am_trsm->send_large(r, Ljjv, j, isv);
-            //     }
-            // }
-
             // Trigger myself
             for (int i = j + nprows; i < num_blocks; i += nprows) {
                 assert(block_2_rank(i,j) == rank);
@@ -328,9 +301,6 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
     // Sends a panel (trsm'ed block A(i,j)) and trigger gemms requiring A(i,j)
     auto am_gemm = comm.make_large_active_msg(
         [&](int& i, int& j) {
-            // for(auto& ij: ijs) {
-            //     gemm.fulfill_promise({j,ij[0],ij[1]});
-            // }
             if(block_2_rank_row(i,j) == rank_row) {
                 const int off_right = (npcols + rank_col - block_2_rank_col(i,j)) % npcols;
                 assert(off_right > 0); // Can't be me
@@ -374,36 +344,6 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
             int j=ij[1];
             assert(block_2_rank(i,j) == rank);
             assert(i > j);
-            // map<int,vector<int2>> fulfill;
-            // for (int k = j+1; k < num_blocks; k++) {
-            //     int ii = std::max(i,k);
-            //     int jj = std::min(i,k);
-            //     fulfill[block_2_rank(ii,jj)].push_back({ii,jj});
-            // }
-            // for (auto& rf: fulfill) {
-            //     int r = rf.first;
-            //     if (r == rank) {
-            //         for (auto& ij_gemm : rf.second) {
-            //             gemm.fulfill_promise({j,ij_gemm[0],ij_gemm[1]});
-            //             if(deps_log) {
-            //                 dlog.add_event(make_unique<DepsEvent>(trsm.name(ij), gemm.name({j,ij_gemm[0],ij_gemm[1]})));
-            //             }
-            //         }
-            //     }
-            //     else {
-            //         auto Lijv = view<double>(blocks[i+j*num_blocks]->data(), block_size*block_size);
-            //         auto ijsv = view<int2>(rf.second.data(), rf.second.size());
-            //         for(auto ij_gemm: ijsv) {
-            //             if(deps_log) {
-            //                 if(deps_log) {
-            //                     dlog.add_event(make_unique<DepsEvent>(trsm.name(ij), gemm_name({j,ij_gemm[0],ij_gemm[1]}, r)));
-            //                 }
-            //             }
-            //         }
-            //         am_gemm->send_large(r, Lijv, i, j, ijsv);
-            //     }
-            // }
-
             // Local
             // Careful to not count the pivot (syrk) twice
             for (int k = j + npcols; k < i; k += npcols) {
@@ -423,21 +363,16 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
             for (int c = 0; c < npcols; c++) {
                 if(j+c >= num_blocks) break;
                 int dest = block_2_rank(i,j+c);
-                if(dest != rank) {
-                    dests.insert(dest);
-                }
+                if(dest != rank) dests.insert(dest);
             }
             for (int r = 0; r < nprows; r++) {
                 if(i+r >= num_blocks) break;
                 int dest = block_2_rank(i+r,i);
-                if(dest != rank) {
-                    dests.insert(dest);
-                }
+                if(dest != rank) dests.insert(dest);
             }
             for(auto& dest: dests) {
                 am_gemm->send_large(dest, Lijv, i, j);
             }
-
         })
         .set_indegree([&](int2 ij) {
             assert(block_2_rank(ij[0],ij[1]) == rank);

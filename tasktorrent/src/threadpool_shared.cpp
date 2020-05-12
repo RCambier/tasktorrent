@@ -5,6 +5,8 @@
 #include <memory>
 #include <cassert>
 
+#include <sched.h>
+
 #include "util.hpp"
 #include "tasks.hpp"
 #include "threadpool_shared.hpp"
@@ -89,6 +91,12 @@ void Threadpool_shared::start()
     for (int self = 0; self < n_threads; self++)
     {
         threads[self] = std::thread([self, n_threads, this]() {
+
+            cpu_set_t my_set;
+            CPU_ZERO(&my_set);
+            CPU_SET(self, &my_set);
+            sched_setaffinity(0, sizeof(cpu_set_t), &my_set);
+
             // This is the function all threads are continuously running
 
             std::string name = basename + std::to_string(self);
