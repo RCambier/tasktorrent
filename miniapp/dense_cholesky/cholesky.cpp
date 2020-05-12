@@ -73,7 +73,7 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
                 blocks[ii+jj*num_blocks]=make_unique<MatrixXd>(block_size,block_size);
                 *blocks[ii+jj*num_blocks]=MatrixXd::NullaryExpr(block_size, block_size, val_loc);
             } else {
-                blocks[ii+jj*num_blocks]=make_unique<MatrixXd>();
+                blocks[ii+jj*num_blocks]=make_unique<MatrixXd>(block_size,block_size);
             }
         }
     }
@@ -224,12 +224,14 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
     DepsLogger dlog(1000000);
 
     // Send a potrf'ed pivot A(k,k) and trigger trsms below requiring A(k,k)
-    auto am_trsm = comm.make_active_msg( 
-            [&](view<double> &Ljj, int& j, view<int>& is) {
-                *blocks[j+j*num_blocks] = Map<MatrixXd>(Ljj.data(), block_size, block_size);
+    auto am_trsm = comm.make_large_active_msg( 
+            [&](int& j, view<int>& is) {
                 for(auto& i: is) {
                     trsm.fulfill_promise({i,j});
                 }
+            },
+            [&](int& j, view<int>& is) {
+                return blocks[j+j*num_blocks]->data();
             });
 
     /**
@@ -265,7 +267,7 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
                             dlog.add_event(make_unique<DepsEvent>(potrf.name(j), trsm_name({i,j}, r)));
                         }
                     }
-                    am_trsm->send(r, Ljjv, j, isv);
+                    am_trsm->send_large(r, Ljjv, j, isv);
                 }
 
             }
@@ -289,12 +291,14 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
         });
 
     // Sends a panel (trsm'ed block A(i,j)) and trigger gemms requiring A(i,j)
-    auto am_gemm = comm.make_active_msg(
-        [&](view<double> &Lij, int& i, int& j, view<int2>& ijs) {
-            *blocks[i+j*num_blocks] = Map<MatrixXd>(Lij.data(), block_size, block_size);
+    auto am_gemm = comm.make_large_active_msg(
+        [&](int& i, int& j, view<int2>& ijs) {
             for(auto& ij: ijs) {
                 gemm.fulfill_promise({j,ij[0],ij[1]});
             }
+        },
+        [&](int& i, int& j, view<int2>& ijs) {
+            return blocks[i+j*num_blocks]->data();
         });
 
     /**
@@ -341,7 +345,7 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
                             }
                         }
                     }
-                    am_gemm->send(r, Lijv, i, j, ijsv);
+                    am_gemm->send_large(r, Lijv, i, j, ijsv);
                 }
             }
         })
