@@ -250,6 +250,9 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
             },
             [&](int& j) {
                 return blocks[j+j*num_blocks]->data();
+            },
+            [&](int&){
+                return;
             });
 
     /**
@@ -324,6 +327,9 @@ void cholesky(const int n_threads, const int verb, const int block_size, const i
         },
         [&](int& i, int& j) {
             return blocks[i+j*num_blocks]->data();
+        },
+        [&](int& i, int& j) {
+            return;
         });
 
     /**
